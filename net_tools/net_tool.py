@@ -3,22 +3,26 @@ import socket
 import subprocess
 import threading
 
+import sys
+
 
 def initiate():
     parser = argparse.ArgumentParser(description="some message")
-    parser.set_defaults(intro="Black Hat Utility")
+    parser.set_defaults()
 
     parser.add_argument('-t', '--target', action='store', help='address of target')
     parser.add_argument('-p', '--port', action='store', help='port to use')
-    parser.add_argument('-l', '--listen', action='store', choices=['Y', 'N'],
-                        help='listen on [host]:[port] for incoming connection (Y/N)')
-    parser.add_argument('-e', '--execute', action='store', help='execute the given file upon receiving a command shell')
-    parser.add_argument('-c', '--command', action='store', help='initialize a command shell')
-    parser.add_argument('-u', '--upload', action='store',
-                        help='upon receiving connection upload a file and writh to [destination]')
+    parser.add_argument('-l', '--listen', action='store_true',
+                        help='listen on [host]:[port] for incoming connection')
+    # parser.add_argument('-e', '--execute', action='store_true', help='execute the given file upon receiving '
+    #                                                                 'a command shell')
+    parser.add_argument('-c', '--command', action='store_true', help='initialize a command shell')
+    parser.add_argument('-u', '--upload', action='store_true',
+                        help='upon receiving connection upload a file and write to [destination]')
     args = parser.parse_args()
-    # print(args)
+    print(args)
     return args
+
 
 
 def client_sender(target, port):
@@ -42,8 +46,10 @@ def client_sender(target, port):
     """
     if connected:
         print("connected to the server")
+
         while True:
-            input_buffer = input("Enter: ")  # get input and send it
+
+            input_buffer = input("shell: ")  # get input and send it
             input_buffer += "\n"
             client.send(input_buffer.encode('utf-8'))
 
@@ -53,16 +59,14 @@ def client_sender(target, port):
             while recv_len > 0:
                 data = client.recv(4096)  # buffer size is 4096
                 recv_len = len(data)
-                respond += data
+                respond += data.decode('utf-8')
 
-                if recv_len < 4096:  # this condition looks suspicious!!!!!!!!!!!!!!!!!!!
+                if recv_len < 4096:
                     break
-
-            print(respond.decode('utf-8'))
-            print("finish sending")
+            print(respond)
 
 
-def run_command(command):
+def execute_command(command):
     """
     run command on current machine
     :param command: command to run
@@ -78,12 +82,33 @@ def run_command(command):
     return output
 
 
-def client_handler(client_socket, upload_destination, execute, command):
+def command_shell(client_socket):
+
+    while True:
+
+        cmd_buffer = ""
+        while "\n" not in cmd_buffer:
+            cmd_buffer += client_socket.recv(1024).decode('utf-8')
+
+        respond = execute_command(cmd_buffer)
+
+        if type(respond) is str:  # it becomes str when an error occurs
+            respond = respond.encode('utf-8')
+        if not len(respond):
+            respond = "This command has no output. Current pwd is: ".encode('utf-8') + execute_command("pwd")
+
+        print("respond value is" + respond.decode('utf-8'))
+        print(type(respond))
+        client_socket.send(respond)
+
+
+def client_handler(client_socket, upload_destination, command):
     """
     TODO: finish up 'upload'
     """
-    if not upload_destination and not execute and not command:
-        client_socket.send("?".encode('utf-8'))
+    if not upload_destination and not command:
+        while True:
+            client_socket.send("?".encode('utf-8'))
 
     if upload_destination:
         file_buffer = ""
@@ -105,23 +130,8 @@ def client_handler(client_socket, upload_destination, execute, command):
         except Exception:
             client_socket.send("failed to save the file")
 
-    if execute:
-        output = run_command(execute)
-        client_socket.send(output)
 
-    if command:
-        while True:
-            client_socket.send("<BHP:#> ")
-            cmd_buffer = ""
-            while "\n" not in cmd_buffer:
-                cmd_buffer += client_socket.recv(1024)
-
-            respond = run_command(cmd_buffer)
-
-            client_socket.send(respond)
-
-
-def server_loop(target, port, upload, execute, command):
+def server_loop(target, port, upload=None, command=None):
     if not target:
         target = "0.0.0.0"  # all interfaces!!!!!!!!!!!!!!!!!
 
@@ -130,49 +140,65 @@ def server_loop(target, port, upload, execute, command):
     server.listen(5)  # don't understand this
     print("listening......")
     while True:
-        client_socket, address = server.accept()
+        client_socket, address = server.accept()  # create thread if receiving new socket
         print("receive a client socket from " + str(address))
         # create a thread whenever a client connects to the server
-        client_thread = threading.Thread(target=client_handler, args=(client_socket, upload, execute, command))
+        if command:
+            client_thread = threading.Thread(target=command_shell, args=(client_socket,))
+        elif upload:
+            client_thread = threading.Thread(target=command_shell, args=(client_socket,))
+        else:
+            print("unknown error")
         client_thread.start()
 
 
 def main():
+    if not len(sys.argv[1:]):
+        print("Black Hat Utility")
+        print("use '-h' to print manual")
+        return
+
     args = initiate()
 
     listen = None
     port = None
-    execute = None
     command = None
     upload_location = None
     target = None
 
-    if args.listen == "Y":
+    if args.listen:
         listen = True
     if args.target:
         target = args.target
     if args.port:
         port = int(args.port)
-    if args.execute:
-        execute = args.execute
     if args.command:
         command = args.command
     if args.upload:
         upload_location = args.upload
 
+    if not port:
+        print("missing port")
+        return
+
     if not listen:  # client
-        if not port or not target:
-            print("client mode" + "\n" + "missing port or target address")
-        else:
-            # buffer = sys.stdin.read()  # read from terminal and send to the server; stop when ctrl + D
-            client_sender(target, port)
+        if not target:
+            print("client missing target")
+        # buffer = sys.stdin.read()  # read from terminal and send to the server; stop when ctrl + D
+        client_sender(target, port)
 
     if listen:  # server
-        if not port:
-            print("server mode" + "\n" + "missing port")
-        else:
-            server_loop(target, port, upload_location, execute, command)
+        if command and upload_location:
+            print("choose either upload or run command")
+            return
 
+        if command:
+            server_loop(target, port, command=command)
+        elif upload_location:
+            server_loop(target, port, upload=upload_location)
+        else:
+            print("choose from command or upload")
 
 if __name__ == '__main__':
     main()
+# initiate()
