@@ -5,6 +5,8 @@ import threading
 
 import sys
 
+import os
+
 
 def initiate():
     parser = argparse.ArgumentParser(description="some message")
@@ -22,7 +24,6 @@ def initiate():
     args = parser.parse_args()
     print(args)
     return args
-
 
 
 def client_sender(target, port):
@@ -49,7 +50,7 @@ def client_sender(target, port):
 
         while True:
 
-            input_buffer = input("shell: ")  # get input and send it
+            input_buffer = input("Enter: ")  # get input and send it
             input_buffer += "\n"
             client.send(input_buffer.encode('utf-8'))
 
@@ -83,6 +84,9 @@ def execute_command(command):
 
 
 def command_shell(client_socket):
+    """
+    A thread run by server
+    """
 
     while True:
 
@@ -90,45 +94,53 @@ def command_shell(client_socket):
         while "\n" not in cmd_buffer:
             cmd_buffer += client_socket.recv(1024).decode('utf-8')
 
-        respond = execute_command(cmd_buffer)
+        if cmd_buffer[0:2] == "cd":
+            try:
+                os.chdir(cmd_buffer[3:].strip())
+                respond = execute_command("pwd")
+            except FileNotFoundError:
+                respond = "not such directory"
+        else:
+            respond = execute_command(cmd_buffer)
 
         if type(respond) is str:  # it becomes str when an error occurs
             respond = respond.encode('utf-8')
         if not len(respond):
             respond = "This command has no output. Current pwd is: ".encode('utf-8') + execute_command("pwd")
 
-        print("respond value is" + respond.decode('utf-8'))
-        print(type(respond))
         client_socket.send(respond)
 
 
-def client_handler(client_socket, upload_destination, command):
+def upload_thread(client_socket):
     """
-    TODO: finish up 'upload'
+
+    TODO: cannot determine which file to upload
     """
-    if not upload_destination and not command:
-        while True:
-            client_socket.send("?".encode('utf-8'))
+    while True:
 
-    if upload_destination:
-        file_buffer = ""
-        """
-        read data until none is available 
-        """
-        while True:
-            data = client_socket.recv(1024)
-            if not data:
-                break
-            else:
-                file_buffer += data
+        upload_destination = ""
+        while "\n" not in upload_destination:
+            upload_destination += client_socket.recv(1024).decode('utf-8')
 
-        try:
-            file_descriptor = open(upload_destination, "wb")
-            file_descriptor.write(file_buffer)
-            file_descriptor.close()
-            client_socket.send("successfully saved file to " + upload_destination)
-        except Exception:
-            client_socket.send("failed to save the file")
+        if upload_destination:
+            file_buffer = ""
+            """
+            read data until none is available 
+            """
+            while True:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
+                else:
+                    file_buffer += data
+
+            try:
+                file_descriptor = open(upload_destination, "wb")
+                file_descriptor.write(file_buffer)
+                file_descriptor.close()
+                client_socket.send("successfully saved file to " + upload_destination)
+            except Exception:
+                client_socket.send("failed to save the file")
 
 
 def server_loop(target, port, upload=None, command=None):
@@ -146,7 +158,7 @@ def server_loop(target, port, upload=None, command=None):
         if command:
             client_thread = threading.Thread(target=command_shell, args=(client_socket,))
         elif upload:
-            client_thread = threading.Thread(target=command_shell, args=(client_socket,))
+            client_thread = threading.Thread(target=upload_thread, args=(client_socket,))
         else:
             print("unknown error")
         client_thread.start()
@@ -199,6 +211,6 @@ def main():
         else:
             print("choose from command or upload")
 
+
 if __name__ == '__main__':
     main()
-# initiate()
